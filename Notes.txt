@@ -1,0 +1,30 @@
+Я начал делать первую итерацию бота по фуллу с ИИшкой, хочу получить рабочий продукт с каждой
+частью кода в своём пайтон файле, я добавил документацию, но там ещё супер много работы
+
+В идеале такая структура проекта, я ещё многого не сделал:
+
+marbet_chatbot/
+├── docs/                      # Document directory
+│   ├── Activity_Overview.pdf
+│   ├── Guest_WiFi.pdf
+│   ├── Information_A-Z_Scenic_Eclipse_I.pdf
+│   ├── Packlist.pdf
+│   ├── SPA_brochure.pdf
+│   ├── Tutorial_ESTA.pdf
+│   └── Tutorial_eTA.pdf
+│
+├── src/
+│   ├── __init__.py
+│   ├── document_processor.py  # Document processing
+│   ├── rag_pipeline.py        # RAG implementation
+│   ├── chatbot.py             # Main chatbot logic
+│   └── utils.py               # Helper functions
+│
+├── chroma_db/                 # Vector store persistence
+│
+├── tests/                     # Test directory
+├── main.py                    # Entry point
+├── requirements.txt           # Dependencies
+└── README.md                  # Documentation
+
+Я закинул визуализацию пайплайна в имаге формате
