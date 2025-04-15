@@ -11,12 +11,11 @@ from typing import List, Dict, Any, Optional, Union
 
 from langchain_ollama import OllamaEmbeddings, ChatOllama
 from langchain_community.vectorstores import Chroma
-from langchain.prompts import PromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
+from langchain_core.runnables import RunnablePassthrough, RunnableSequence
 from langchain.memory import ConversationBufferMemory
-from langchain.chains import RetrievalQA
 from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough
 
 # Set up logging
 logger = logging.getLogger("marbet_chatbot.rag_pipeline")
@@ -194,8 +193,7 @@ class RAGPipeline:
 
         if search_kwargs is None:
             search_kwargs = {
-                "k": 5,  # Number of documents to retrieve
-                "score_threshold": 0.5  # Minimum relevance score
+                "k": 5  # Number of documents to retrieve
             }
 
         logger.info(f"Initializing retriever with parameters: {search_kwargs}")
@@ -222,22 +220,18 @@ class RAGPipeline:
 
     def _initialize_prompt(self):
         """Initialize prompt template"""
-        # Create the prompt template
+        # Create a chat prompt template that works better with modern LangChain
         template = """
         You are an AI event assistant for Marbet, a German event management agency. You are helping travelers with their incentive trip aboard the Scenic Eclipse ship traveling to Canada and the USA from October 4-11, 2024.
 
-        ## Your Role
-        - Provide accurate information about the trip itinerary, activities, ship services, and travel requirements
-        - Answer questions clearly and concisely
-        - Stay within the information provided in the context
+        Your role is to provide accurate information about the trip itinerary, activities, ship services, and travel requirements. Answer questions clearly and concisely based only on the information provided in the context.
 
-        ## Context Information:
+        Context Information:
         {context}
 
-        ## Question:
-        {question}
+        Question: {query}
 
-        ## Guidelines:
+        Guidelines:
         1. Answer based ONLY on the information in the context
         2. If you don't have enough information, politely say so
         3. Be specific about dates, locations, and times when available
@@ -265,20 +259,20 @@ class RAGPipeline:
 
         logger.info("Initializing RAG chain")
 
-        # Create RetrievalQA chain with memory
-        qa_chain = RetrievalQA.from_chain_type(
-            llm=self.llm,
-            chain_type="stuff",
-            retriever=self.retriever,
-            return_source_documents=True,
-            chain_type_kwargs={
-                "prompt": self.prompt,
-                "memory": self.memory
-            }
+        # Create a modern LangChain RAG pipeline using the LCEL (LangChain Expression Language)
+        # This approach is more reliable with newer versions of LangChain
+
+        def format_docs(docs):
+            return "\n\n".join(doc.page_content for doc in docs)
+
+        # Build the RAG chain
+        self.chain = (
+                {"context": self.retriever | format_docs, "query": RunnablePassthrough()}
+                | self.prompt
+                | self.llm
+                | StrOutputParser()
         )
 
-        # Use the RetrievalQA chain as our main chain
-        self.chain = qa_chain
         logger.info("RAG chain initialized")
 
     def query(self, question: str) -> str:
@@ -297,12 +291,8 @@ class RAGPipeline:
         logger.info(f"Processing query: {question}")
 
         try:
-            # Get response from chain
-            result = self.chain({"query": question})
-
-            # Extract response text
-            response = result.get("result", "")
-
+            # With the new chain structure, we can just invoke with the query
+            response = self.chain.invoke(question)
             return response
 
         except Exception as e:
@@ -323,7 +313,7 @@ class RAGPipeline:
         if self.retriever is None:
             raise ValueError("Retriever not initialized. Call initialize_pipeline() first.")
 
-        return self.retriever.get_relevant_documents(query, k=k)
+        return self.retriever.get_relevant_documents(query)
 
 
 if __name__ == "__main__":
