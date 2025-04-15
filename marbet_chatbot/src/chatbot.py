@@ -1,23 +1,20 @@
-import argparse
+"""
+Main chatbot implementation for the Marbet Event Assistant.
+
+This module provides the main MarbetChatbot class that integrates
+document processing and RAG pipeline functionality.
+"""
+
 import os
-import sys
 import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
-# Import our custom modules (assuming they're in the same directory)
-from document_processor import DocumentProcessor
-from rag_pipeline import RAGPipeline
+from src.document_processor import DocumentProcessor
+from src.rag_pipeline import RAGPipeline
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler("chatbot.log"),
-        logging.StreamHandler(sys.stdout)
-    ]
-)
-logger = logging.getLogger(__name__)
+# Set up logging
+logger = logging.getLogger("marbet_chatbot.chatbot")
 
 
 class MarbetChatbot:
@@ -28,56 +25,44 @@ class MarbetChatbot:
                  model_name: str = "llama3.1:8b",
                  docs_dir: str = "./docs",
                  db_dir: str = "./chroma_db"):
+        """
+        Initialize the chatbot
+
+        Args:
+            ollama_url: URL of the Ollama server
+            model_name: Name of the model to use
+            docs_dir: Directory containing documents
+            db_dir: Directory for vector store
+        """
         self.ollama_url = ollama_url
         self.model_name = model_name
         self.docs_dir = docs_dir
         self.db_dir = db_dir
+
+        # Components
+        self.document_processor = None
         self.pipeline = None
+
+        # Chat history
         self.chat_history = []
 
-        # Initialize the system prompt
-        self.system_prompt = self._create_system_prompt()
+        # Initialization status
+        self.is_initialized = False
 
-    def _create_system_prompt(self) -> str:
-        """Create the system prompt for the chatbot"""
-        return """
-        # Marbet AI Event Assistant
-
-        ## Identity
-        You are an AI event assistant for Marbet's incentive trip aboard the Scenic Eclipse ship, 
-        traveling to Canada and the USA from October 4-11, 2024. Your purpose is to provide 
-        travelers with accurate and helpful information about their journey.
-
-        ## Core Information Categories
-        - Activities and excursions for each destination
-        - Ship services and amenities
-        - Travel requirements and documents
-        - WiFi and technology
-        - Visa requirements (ESTA for USA, eTA for Canada)
-        - General travel assistance
-
-        ## Tone and Style
-        - Professional and courteous
-        - Clear and concise
-        - Practical and informative
-        - Service-oriented
-
-        ## Response Guidelines
-        1. Answer questions based ONLY on information in the provided context
-        2. When information is available, be specific and detailed
-        3. If information isn't in the context, politely acknowledge and offer to help with something else
-        4. For schedule-related questions, include specific dates and times when available
-        5. Format your responses for easy reading, using bullet points when appropriate
-        6. Highlight important information that travelers need to know
-        7. When referencing documents, you can mention the source (e.g., "According to the Activity Overview...")
-
-        Remember, your goal is to help travelers have a smooth, enjoyable experience by providing 
-        accurate information and practical assistance.
+    def initialize(self, rebuild_db: bool = False) -> 'MarbetChatbot':
         """
+        Initialize the chatbot with document processing and RAG setup
 
-    def initialize(self, rebuild_db: bool = False):
-        """Initialize the chatbot with document processing and RAG setup"""
+        Args:
+            rebuild_db: Whether to rebuild the vector database
+
+        Returns:
+            Self for method chaining
+        """
         logger.info("Initializing Marbet Chatbot")
+
+        # Initialize document processor
+        self.document_processor = DocumentProcessor(document_dir=self.docs_dir)
 
         # Initialize RAG pipeline
         self.pipeline = RAGPipeline(
@@ -90,8 +75,7 @@ class MarbetChatbot:
             logger.info("Building new vector database")
 
             # Process documents
-            doc_processor = DocumentProcessor(document_dir=self.docs_dir)
-            processed_data = doc_processor.process_all()
+            processed_data = self.document_processor.process_all()
 
             # Initialize pipeline with processed documents
             self.pipeline.initialize_pipeline(
@@ -102,12 +86,21 @@ class MarbetChatbot:
             logger.info("Loading existing vector database")
             self.pipeline.initialize_pipeline(persist_dir=self.db_dir)
 
+        self.is_initialized = True
         logger.info("Chatbot initialization complete")
         return self
 
     def process_query(self, query: str) -> Dict[str, Any]:
-        """Process a user query and return response"""
-        if not self.pipeline:
+        """
+        Process a user query and return response
+
+        Args:
+            query: User query text
+
+        Returns:
+            Dictionary with query, response, and status
+        """
+        if not self.is_initialized:
             raise ValueError("Chatbot not initialized. Call initialize() first.")
 
         logger.info(f"Processing user query: {query}")
@@ -154,66 +147,53 @@ class MarbetChatbot:
                 "error": str(e)
             }
 
+    def get_relevant_documents(self, query: str, k: int = 5) -> List[Any]:
+        """
+        Get relevant documents for a query
+
+        Args:
+            query: Query text
+            k: Number of documents to retrieve
+
+        Returns:
+            List of relevant document objects
+        """
+        if not self.is_initialized:
+            raise ValueError("Chatbot not initialized. Call initialize() first.")
+
+        logger.info(f"Getting relevant documents for query: {query}")
+        return self.pipeline.get_relevant_documents(query, k=k)
+
     def get_chat_history(self) -> List[Dict[str, Any]]:
-        """Return the chat history"""
+        """
+        Return the chat history
+
+        Returns:
+            List of chat messages with roles and content
+        """
         return self.chat_history
 
-    def clear_chat_history(self):
+    def clear_chat_history(self) -> None:
         """Clear the chat history"""
         self.chat_history = []
         logger.info("Chat history cleared")
 
 
-def run_cli():
-    """Run a command-line interface for the chatbot"""
-    parser = argparse.ArgumentParser(description="Marbet Event Assistant Chatbot")
-    parser.add_argument("--rebuild", action="store_true", help="Rebuild the vector database")
-    parser.add_argument("--docs-dir", type=str, default="./docs", help="Directory containing documents")
-    parser.add_argument("--db-dir", type=str, default="./chroma_db", help="Directory for vector database")
-    parser.add_argument("--ollama-url", type=str, default="http://194.171.191.226:3061", help="Ollama server URL")
-    parser.add_argument("--model", type=str, default="llama3.1:8b", help="Model name to use")
-
-    args = parser.parse_args()
-
-    # Print welcome message
-    print("\n" + "=" * 80)
-    print("                    MARBET EVENT ASSISTANT - SALES TRIP 2024")
-    print("=" * 80)
-    print("\nInitializing AI assistant. This may take a moment...\n")
-
-    # Initialize chatbot
-    chatbot = MarbetChatbot(
-        ollama_url=args.ollama_url,
-        model_name=args.model,
-        docs_dir=args.docs_dir,
-        db_dir=args.db_dir
-    ).initialize(rebuild_db=args.rebuild)
-
-    print("\nMarbet Event Assistant is ready to help with your trip questions!")
-    print("Ask about activities, ship services, travel requirements, or anything else related to your trip.")
-    print("Type 'exit', 'quit', or 'bye' to end the conversation.\n")
-
-    # Main interaction loop
-    while True:
-        try:
-            user_input = input("You: ")
-
-            # Check for exit commands
-            if user_input.lower() in ["exit", "quit", "bye", "goodbye"]:
-                print("\nThank you for using the Marbet Event Assistant. Have a wonderful trip!")
-                break
-
-            # Process query
-            result = chatbot.process_query(user_input)
-            print(f"\nAssistant: {result['response']}\n")
-
-        except KeyboardInterrupt:
-            print("\n\nSession terminated by user.")
-            break
-        except Exception as e:
-            print(f"\nAn error occurred: {e}")
-            print("Please try again or restart the application.")
-
-
 if __name__ == "__main__":
-    run_cli()
+    # Setup basic logging for standalone testing
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+    # Create and initialize chatbot
+    chatbot = MarbetChatbot(
+        ollama_url="http://194.171.191.226:3061",
+        model_name="llama3.1:8b",
+        docs_dir="./docs",
+        db_dir="./chroma_db"
+    ).initialize()
+
+    # Test query
+    query = "What activities are available in Halifax?"
+    result = chatbot.process_query(query)
+
+    print(f"\nQuery: {result['query']}")
+    print(f"Response: {result['response']}")

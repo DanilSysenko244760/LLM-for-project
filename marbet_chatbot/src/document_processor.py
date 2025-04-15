@@ -1,46 +1,139 @@
+"""
+Document processing module for the Marbet Event Assistant Chatbot.
+
+This module handles loading, processing, and chunking of documents for the RAG system.
+"""
+
 import os
-import pandas as pd
-from typing import List, Dict, Any
-from langchain_community.document_loaders import PyPDFLoader
+import re
+from typing import List, Dict, Any, Optional, Tuple
+import logging
+
+from langchain_community.document_loaders import PyPDFLoader, DirectoryLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_core.documents import Document
+
+# Set up logging
+logger = logging.getLogger("marbet_chatbot.document_processor")
 
 
 class DocumentProcessor:
-    """Process event documents for the Marbet chatbot"""
+    """Process documents for the RAG system"""
 
     def __init__(self, document_dir: str = "./docs"):
+        """
+        Initialize the document processor
+
+        Args:
+            document_dir: Directory containing document files
+        """
         self.document_dir = document_dir
 
-    def load_all_documents(self) -> List[Dict[str, Any]]:
-        """Load all documents from the directory"""
+    def process_all(self) -> Dict[str, Any]:
+        """
+        Process all documents in the document directory
+
+        Returns:
+            Dictionary containing original documents and processed chunks
+        """
+        # Load raw documents
+        documents = self._load_documents()
+
+        # Extract metadata and enhance documents
+        enhanced_docs = self._enhance_documents(documents)
+
+        # Split documents into chunks
+        chunks = self._split_documents(enhanced_docs)
+
+        return {
+            "documents": enhanced_docs,
+            "chunks": chunks
+        }
+
+    def _load_documents(self) -> List[Document]:
+        """
+        Load all PDF documents from the document directory
+
+        Returns:
+            List of document objects
+        """
+        logger.info(f"Loading documents from {self.document_dir}")
+
         documents = []
 
+        # Check if directory exists
+        if not os.path.exists(self.document_dir):
+            logger.error(f"Document directory {self.document_dir} does not exist")
+            raise FileNotFoundError(f"Document directory {self.document_dir} does not exist")
+
+        # Load each PDF file
         for filename in os.listdir(self.document_dir):
             if filename.endswith('.pdf'):
                 file_path = os.path.join(self.document_dir, filename)
+
                 try:
-                    # Extract text and metadata
                     loader = PyPDFLoader(file_path)
                     docs = loader.load()
-
-                    # Add additional metadata
-                    for doc in docs:
-                        doc.metadata["filename"] = filename
-                        doc.metadata["category"] = self._categorize_document(filename)
-                        documents.append(doc)
-
-                    print(f"Successfully loaded {filename}")
+                    documents.extend(docs)
+                    logger.info(f"Loaded {len(docs)} pages from {filename}")
                 except Exception as e:
-                    print(f"Error loading {filename}: {e}")
+                    logger.error(f"Error loading {filename}: {e}")
 
-        print(f"Loaded {len(documents)} document pages in total")
+        logger.info(f"Loaded {len(documents)} document pages in total")
         return documents
 
+    def _enhance_documents(self, documents: List[Document]) -> List[Document]:
+        """
+        Enhance documents with additional metadata
+
+        Args:
+            documents: List of document objects
+
+        Returns:
+            Enhanced document objects
+        """
+        enhanced_docs = []
+
+        for doc in documents:
+            # Get filename from source path
+            filename = os.path.basename(doc.metadata.get("source", "unknown"))
+
+            # Add filename to metadata
+            doc.metadata["filename"] = filename
+
+            # Categorize document
+            doc.metadata["category"] = self._categorize_document(filename)
+
+            # Extract dates if applicable
+            if doc.metadata["category"] == "activities":
+                dates = self._extract_dates(doc.page_content)
+                if dates:
+                    doc.metadata["dates"] = dates
+
+            # Extract locations if applicable
+            if doc.metadata["category"] == "activities":
+                locations = self._extract_locations(doc.page_content)
+                if locations:
+                    doc.metadata["locations"] = locations
+
+            enhanced_docs.append(doc)
+
+        logger.info(f"Enhanced {len(enhanced_docs)} documents with metadata")
+        return enhanced_docs
+
     def _categorize_document(self, filename: str) -> str:
-        """Categorize documents based on filename"""
+        """
+        Categorize document based on filename
+
+        Args:
+            filename: Name of the document file
+
+        Returns:
+            Category string
+        """
         categories = {
             "Activity": "activities",
-            "WiFi": "connectivity",
+            "WiFi": "technology",
             "A-Z": "ship_services",
             "Eclipse": "ship_services",
             "Pack": "travel_requirements",
@@ -55,143 +148,113 @@ class DocumentProcessor:
 
         return "general"
 
-    def split_documents(self, documents: List, chunk_size: int = 1000,
-                        chunk_overlap: int = 200) -> List:
-        """Split documents into smaller chunks for better retrieval"""
-        splitter = RecursiveCharacterTextSplitter(
+    def _extract_dates(self, text: str) -> List[str]:
+        """
+        Extract dates from text
+
+        Args:
+            text: Document text
+
+        Returns:
+            List of date strings
+        """
+        # Pattern for dates in format DD.MM.YYYY
+        date_pattern = r'\d{2}\.\d{2}\.202\d'
+        dates = re.findall(date_pattern, text)
+
+        # Also look for dates with day names
+        day_patterns = [
+            r'(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),\s+\d{2}\.\d{2}\.202\d',
+            r'(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),\s+\d{1,2}\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+202\d'
+        ]
+
+        for pattern in day_patterns:
+            dates.extend(re.findall(pattern, text))
+
+        return list(set(dates))  # Remove duplicates
+
+    def _extract_locations(self, text: str) -> List[str]:
+        """
+        Extract locations from text
+
+        Args:
+            text: Document text
+
+        Returns:
+            List of location strings
+        """
+        # Look for location patterns in activities document
+        locations = []
+
+        location_patterns = [
+            r'Halifax',
+            r'Lunenburg',
+            r'Portland',
+            r'Boston',
+            r'Provincetown',
+            r'Marthas Vineyard',
+            r'Martha\'s Vineyard',
+            r'New York',
+            r'New York City'
+        ]
+
+        for location in location_patterns:
+            if re.search(location, text):
+                locations.append(location)
+
+        return list(set(locations))  # Remove duplicates
+
+    def _split_documents(self, documents: List[Document],
+                         chunk_size: int = 1000,
+                         chunk_overlap: int = 200) -> List[Document]:
+        """
+        Split documents into smaller chunks for better retrieval
+
+        Args:
+            documents: List of document objects
+            chunk_size: Maximum size of each chunk
+            chunk_overlap: Overlap between consecutive chunks
+
+        Returns:
+            List of document chunks
+        """
+        logger.info(f"Splitting documents into chunks (size={chunk_size}, overlap={chunk_overlap})")
+
+        # Create text splitter
+        text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
             separators=["\n\n", "\n", ". ", " ", ""]
         )
 
-        chunks = splitter.split_documents(documents)
-        print(f"Split {len(documents)} documents into {len(chunks)} chunks")
+        # Split documents
+        chunks = text_splitter.split_documents(documents)
 
-        # Add additional metadata to help with retrieval
+        # Enhance chunks with additional metadata
         for i, chunk in enumerate(chunks):
-            # Extract date information if available (especially for activities)
-            if chunk.metadata.get("category") == "activities":
-                dates = self._extract_dates(chunk.page_content)
-                if dates:
-                    chunk.metadata["dates"] = dates
-
-            # Add chunk ID for reference
+            # Add chunk ID
             chunk.metadata["chunk_id"] = i
 
+            # Preserve original metadata
+            # Everything from the original document is already copied over
+
+        logger.info(f"Split {len(documents)} documents into {len(chunks)} chunks")
         return chunks
 
-    def _extract_dates(self, text: str) -> List[str]:
-        """Extract dates from text (especially for activities)"""
-        # Simple pattern matching for dates in format: DD.MM.YYYY
-        import re
-        date_pattern = r'\d{2}\.\d{2}\.202\d'
-        dates = re.findall(date_pattern, text)
 
-        # Also look for date mentions in text
-        date_keywords = ["Saturday", "Sunday", "Monday", "Tuesday",
-                         "Wednesday", "Thursday", "Friday"]
+if __name__ == "__main__":
+    # Setup basic logging for standalone testing
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-        for keyword in date_keywords:
-            if keyword in text:
-                # Find the line containing the date
-                lines = text.split('\n')
-                for line in lines:
-                    if keyword in line:
-                        # Extract the full date context
-                        if line not in dates:
-                            dates.append(line)
+    # Test the document processor
+    processor = DocumentProcessor(document_dir="./docs")
+    result = processor.process_all()
 
-        return dates
+    print(f"Processed {len(result['documents'])} documents into {len(result['chunks'])} chunks")
 
-    def create_structured_data(self, documents: List) -> Dict[str, pd.DataFrame]:
-        """Create structured dataframes for specific data types"""
-        structured_data = {}
-
-        # Create activities dataframe
-        activity_docs = [doc for doc in documents if doc.metadata.get("category") == "activities"]
-        if activity_docs:
-            activities = []
-            for doc in activity_docs:
-                # Extract activities from text
-                # This could be enhanced with more advanced parsing
-                sections = doc.page_content.split('\n\n')
-                current_date = None
-
-                for section in sections:
-                    if "Election program" in section or "Optional program" in section:
-                        # Extract activity name
-                        try:
-                            name = section.split("Election program: ")[1].split("\n")[0]
-                        except:
-                            try:
-                                name = section.split("Optional program: ")[1].split("\n")[0]
-                            except:
-                                name = "Unknown activity"
-
-                        activities.append({
-                            "date": current_date,
-                            "name": name,
-                            "description": section,
-                            "category": "activity"
-                        })
-                    elif any(day in section for day in ["Saturday", "Sunday", "Monday", "Tuesday",
-                                                        "Wednesday", "Thursday", "Friday"]):
-                        # This is likely a date section
-                        current_date = section
-
-            structured_data["activities"] = pd.DataFrame(activities)
-
-        # Create ship services dataframe
-        ship_docs = [doc for doc in documents if doc.metadata.get("category") == "ship_services"]
-        if ship_docs:
-            services = []
-            for doc in ship_docs:
-                # Extract A-Z listings
-                lines = doc.page_content.split('\n')
-                current_service = None
-                current_description = ""
-
-                for line in lines:
-                    # Check if this is a new service header (typically single letters or short words)
-                    if len(line.strip()) <= 3 and line.strip().isalpha():
-                        # Save previous service if it exists
-                        if current_service:
-                            services.append({
-                                "service": current_service,
-                                "description": current_description.strip(),
-                                "category": "ship_service"
-                            })
-
-                        current_service = line.strip()
-                        current_description = ""
-                    elif current_service:
-                        current_description += line + " "
-
-            # Add the last service
-            if current_service:
-                services.append({
-                    "service": current_service,
-                    "description": current_description.strip(),
-                    "category": "ship_service"
-                })
-
-            structured_data["ship_services"] = pd.DataFrame(services)
-
-        return structured_data
-
-    def process_all(self):
-        """Run the complete document processing pipeline"""
-        # Load all documents
-        documents = self.load_all_documents()
-
-        # Create structured data (optional)
-        structured_data = self.create_structured_data(documents)
-
-        # Split documents into chunks
-        chunks = self.split_documents(documents)
-
-        return {
-            "documents": documents,
-            "chunks": chunks,
-            "structured_data": structured_data
-        }
+    # Display sample chunks
+    for i, chunk in enumerate(result['chunks'][:3]):
+        print(f"\nChunk {i + 1}:")
+        print(f"Category: {chunk.metadata.get('category')}")
+        print(f"Filename: {chunk.metadata.get('filename')}")
+        print(f"Excerpt: {chunk.page_content[:150]}...")
