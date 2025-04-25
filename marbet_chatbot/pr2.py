@@ -14,13 +14,123 @@ from datetime import datetime
 from langchain_ollama import OllamaEmbeddings, OllamaLLM
 from langchain.chains import ConversationalRetrievalChain
 from langchain.document_loaders import DirectoryLoader, PyPDFDirectoryLoader, PyPDFLoader, TextLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.text_splitter import RecursiveCharacterTextSplitter, MarkdownHeaderTextSplitter, TokenTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain.callbacks.base import BaseCallbackHandler
+from langchain.text_splitter import TextSplitter
+from typing import List, Optional, Any
+import re
+import nltk
+from nltk.tokenize import sent_tokenize
+
+# Download NLTK data if not already present
+try:
+    nltk.data.find('tokenizers/punkt')
+except LookupError:
+    nltk.download('punkt', quiet=True)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+
+class SemanticTextSplitter(TextSplitter):
+    """A text splitter that uses semantic boundaries like paragraphs, sections, and sentences."""
+
+    def __init__(
+            self,
+            chunk_size: int = 700,
+            chunk_overlap: int = 150,
+            paragraph_separator: str = "\n\n",
+            sentence_separator: Optional[str] = None,
+            keep_separator: bool = True,
+            length_function: callable = len,
+    ):
+        super().__init__(chunk_size=chunk_size, chunk_overlap=chunk_overlap,
+                         length_function=length_function, keep_separator=keep_separator)
+        self.paragraph_separator = paragraph_separator
+        self.sentence_separator = sentence_separator
+
+    def split_text(self, text: str) -> List[str]:
+        # First split by paragraphs
+        if self.paragraph_separator:
+            paragraphs = text.split(self.paragraph_separator)
+        else:
+            paragraphs = [text]
+
+        # Initialize output list
+        chunks = []
+        current_chunk = []
+        current_chunk_len = 0
+
+        for paragraph in paragraphs:
+            # Skip empty paragraphs
+            if not paragraph.strip():
+                continue
+
+            # If the paragraph fits within chunk_size, keep it as a unit
+            if self.length_function(paragraph) <= self.chunk_size:
+                if current_chunk_len + self.length_function(paragraph) <= self.chunk_size:
+                    # Add to current chunk
+                    current_chunk.append(paragraph)
+                    current_chunk_len += self.length_function(paragraph)
+                else:
+                    # Start a new chunk
+                    if current_chunk:
+                        chunks.append(self.paragraph_separator.join(current_chunk)
+                                      if self.keep_separator else "".join(current_chunk))
+                    current_chunk = [paragraph]
+                    current_chunk_len = self.length_function(paragraph)
+            else:
+                # Paragraph is too large, split into sentences
+                if not self.sentence_separator:
+                    # Use NLTK to split into sentences
+                    sentences = sent_tokenize(paragraph)
+                else:
+                    sentences = paragraph.split(self.sentence_separator)
+
+                # Process each sentence
+                for sentence in sentences:
+                    if not sentence.strip():
+                        continue
+
+                    sentence_len = self.length_function(sentence)
+
+                    # Handle case where a single sentence is too large
+                    if sentence_len > self.chunk_size:
+                        # If we have accumulated text, add it to chunks
+                        if current_chunk:
+                            chunks.append(self.paragraph_separator.join(current_chunk)
+                                          if self.keep_separator else "".join(current_chunk))
+                            current_chunk = []
+                            current_chunk_len = 0
+
+                        # Split the long sentence using simple splitting
+                        token_splitter = TokenTextSplitter(
+                            chunk_size=self.chunk_size,
+                            chunk_overlap=self.chunk_overlap
+                        )
+                        sub_chunks = token_splitter.split_text(sentence)
+                        chunks.extend(sub_chunks)
+                    else:
+                        # Normal case - add sentence to current chunk if it fits
+                        if current_chunk_len + sentence_len <= self.chunk_size:
+                            current_chunk.append(sentence)
+                            current_chunk_len += sentence_len
+                        else:
+                            # Finalize current chunk and start a new one
+                            if current_chunk:
+                                chunks.append(self.paragraph_separator.join(current_chunk)
+                                              if self.keep_separator else "".join(current_chunk))
+                            current_chunk = [sentence]
+                            current_chunk_len = sentence_len
+
+        # Add the last chunk if it exists
+        if current_chunk:
+            chunks.append(self.paragraph_separator.join(current_chunk)
+                          if self.keep_separator else "".join(current_chunk))
+
+        return chunks
 
 
 class StreamHandler(BaseCallbackHandler):
@@ -34,11 +144,50 @@ class StreamHandler(BaseCallbackHandler):
 
 
 class MarbetEventAssistant:
-    SYSTEM_PROMPT = """You are a helpful event assistant for MARBET company.
-Your task is to answer questions about events and activities from MARBET documents.
-IMPORTANT: When asked about "Election program", this refers to OPTIONAL ACTIVITIES that participants can select, NOT political elections!
-When answering questions about specific dates like "Friday, 11.10.2024" or locations like "New York City", carefully search the documents for these exact dates and locations.
-Always provide detailed information based ONLY on what's in the documents."""
+    SYSTEM_PROMPT = """You are MARBET's AI-powered Event Assistant for the Sales Trip 2024. Your primary purpose is to provide accurate, helpful information to participants about their upcoming luxury travel experience on the Scenic Eclipse I cruise ship, traveling from Canada to the USA in October 2024.
+Core Principles
+
+Document-Based Responses Only: Answer questions using ONLY information found in the provided MARBET documents. Never invent or guess information not explicitly stated in these materials. 
+Event Context: You assist with a luxury cruise sales trip from October 4-11, 2024, traveling from Halifax, Canada to New York City, with stops in Lunenburg, Portland, Boston, Provincetown, and Martha's Vineyard.
+"Election Program" Clarification: The term "Election program" in all documents refers EXCLUSIVELY to optional activities participants can select - it has NOTHING to do with political elections. Always interpret this term as optional excursion choices.
+Accuracy with Dates and Locations: When users ask about specific dates (e.g., "Friday, 11.10.2024") or locations (e.g., "New York City"), search for those exact terms in the documents and provide the relevant information.
+Clear Labeling of Assumptions: If making a logical assumption based on document context, explicitly label it: "Based on the documentation, I would assume that..."
+Handling Missing Information:
+
+Acknowledge understanding: "I understand you're asking about [topic]."
+Be transparent: "The MARBET documents don't provide specific information about [topic]."
+Suggest next steps: "For the most accurate information, please contact the crew team."
+
+
+Communication Style:
+
+Friendly and welcoming
+Concise and clear
+Natural conversational tone
+Professional but not overly formal
+Enthusiastic about the luxury travel experience
+
+
+
+Key Information Areas
+
+Itinerary: Assist with dates, locations, and scheduled activities for each port
+Optional Activities: Provide details on "Election program" options at each location
+Ship Information: Answer questions about the Scenic Eclipse I facilities and services
+Travel Documentation: Guide on ESTA/eTA requirements for USA/Canada
+Packing & Preparation: Advise on what to bring based on the packing list
+Technical Assistance: Help with WiFi connection and onboard technology
+Safety & Procedures: Explain ship safety protocols and emergency procedures
+
+Response Structure
+
+Acknowledge the question with a friendly greeting
+Provide a direct, accurate answer based exclusively on MARBET documents
+Add relevant context or additional helpful information if available in documents
+Clarify any assumptions you're making, clearly labeled as such
+End with an offer to help with further questions
+
+Remember that your goal is to make participants feel informed, confident, and excited about their upcoming luxury travel experience, while sticking strictly to the factual information provided in the MARBET documents."""
 
     def __init__(self,
                  docs_folder: str = "C:/Users/Alex/Documents/GitHub/LLM-for-project/marbet_chatbot/docs",
@@ -118,10 +267,10 @@ Always provide detailed information based ONLY on what's in the documents."""
         except Exception as e:
             logger.error(f"Error loading text files: {e}")
 
-        # Split documents into chunks
-        splitter = RecursiveCharacterTextSplitter(chunk_size=700, chunk_overlap=300)
+        # Split documents using semantic chunking
+        splitter = SemanticTextSplitter(chunk_size=700, chunk_overlap=150)
         chunks = splitter.split_documents(all_docs)
-        logger.info(f"Split documents into {len(chunks)} chunks")
+        logger.info(f"Split documents into {len(chunks)} chunks using semantic chunking")
 
         # Create embeddings and vectorstore
         embeddings = OllamaEmbeddings(base_url=self.ollama_server, model=self.embed_model)
@@ -148,7 +297,8 @@ Always provide detailed information based ONLY on what's in the documents."""
 
             docs = loader.load()
 
-            splitter = RecursiveCharacterTextSplitter(chunk_size=700, chunk_overlap=300)
+            # Use semantic chunking instead of character-based splitting
+            splitter = SemanticTextSplitter(chunk_size=700, chunk_overlap=150)
             chunks = splitter.split_documents(docs)
 
             embeddings = OllamaEmbeddings(base_url=self.ollama_server, model=self.embed_model)

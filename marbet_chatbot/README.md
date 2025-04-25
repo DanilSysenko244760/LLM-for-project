@@ -1,49 +1,54 @@
-# Marbet Event Assistant Chatbot
+# Marbet Event Assistant
 
-A RAG-enhanced chatbot providing event assistance based on Marbet's documents. The chatbot is built using Python, LangChain, and Ollama, demonstrating the ability to retrieve and deliver event-specific information in an accurate and helpful manner.
+A Retrieval-Augmented Generation (RAG) chatbot developed for Marbet to assist travelers during their incentive trip aboard the Scenic Eclipse ship. This AI assistant provides information about activities, ship services, travel requirements, and more.
+
+## Features
+
+- **Document Analysis**: Processes text and images from PDF documents
+- **Intelligent Retrieval**: Finds relevant information from trip documents
+- **Conversational Interface**: Natural language interactions for trip questions
+- **Multi-Interface Support**: CLI and API options for different use cases
+- **Sources Tracking**: Shows information sources for full transparency
 
 ## Project Structure
 
 ```
-marbet_chatbot/
-├── docs/                      # Document directory
+marbet_assistant/
+├── data/                       # Document directory
 │   ├── Activity_Overview.pdf
 │   ├── Guest_WiFi.pdf
-│   ├── Information_A-Z_Scenic_Eclipse_I.pdf
+│   ├── Information_A-Z_Scenic_Eclipse_I.pdf 
 │   ├── Packlist.pdf
 │   ├── SPA_brochure.pdf
 │   ├── Tutorial_ESTA.pdf
 │   └── Tutorial_eTA.pdf
 │
 ├── src/
-│   ├── __init__.py            # Package initialization
-│   ├── document_processor.py  # Document processing
-│   ├── rag_pipeline.py        # RAG implementation
-│   ├── chatbot.py             # Main chatbot logic
-│   └── utils.py               # Helper functions
+│   ├── document_processor.py   # Document processing and chunking
+│   ├── embeddings.py           # Vector embedding functionality
+│   ├── rag_pipeline.py         # Main RAG implementation
+│   ├── utils.py                # Utility functions
+│   └── config.py               # Configuration settings
 │
-├── chroma_db/                 # Vector store persistence
+├── app/
+│   ├── cli.py                  # Command-line interface
+│   └── api.py                  # REST API interface
 │
-├── tests/                     # Test directory
-├── main.py                    # Entry point
-├── requirements.txt           # Dependencies
-└── README.md                  # Documentation
+├── notebooks/                  # Jupyter notebooks for exploration
+│   └── exploration.ipynb       # Document analysis and testing
+│
+├── vector_db/                  # Vector database storage (gitignored)
+├── main.py                     # Main entry point
+├── requirements.txt            # Dependencies
+└── README.md                   # Documentation
 ```
-
-## Key Features
-
-- **Document Processing**: Automatically loads, processes, and chunks PDF documents
-- **Metadata Extraction**: Extracts metadata like dates and locations from documents
-- **RAG Implementation**: Uses Retrieval-Augmented Generation for accurate responses
-- **Vector Storage**: Efficiently stores and retrieves document embeddings
-- **Multiple Interfaces**: Supports both CLI and API interfaces
 
 ## Installation
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/yourusername/marbet-chatbot.git
-   cd marbet-chatbot
+   git clone https://github.com/yourusername/marbet-assistant.git
+   cd marbet-assistant
    ```
 
 2. Create a virtual environment:
@@ -57,11 +62,12 @@ marbet_chatbot/
    pip install -r requirements.txt
    ```
 
-4. Download the necessary models:
-   ```bash
-   # Ensure Ollama is running
-   ollama pull llama3.1:8b
-   ```
+4. Install Tesseract OCR for image text extraction:
+   - For Windows: Download from https://github.com/UB-Mannheim/tesseract/wiki
+   - For macOS: `brew install tesseract`
+   - For Linux: `sudo apt install tesseract-ocr`
+
+5. Place PDF documents in the `data/` directory.
 
 ## Usage
 
@@ -69,86 +75,89 @@ marbet_chatbot/
 
 ```bash
 # Run with default settings
-python main.py
+python main.py --mode cli
 
-# Rebuild the vector database
-python main.py --rebuild
+# Rebuild the vector database (first run or when documents change)
+python main.py --mode cli --rebuild
 
-# Specify a different model
-python main.py --model llama3.2
+# Show source documents for each response
+python main.py --mode cli --show-sources
+
+# Specify custom directories
+python main.py --mode cli --data-dir ./custom_docs --vector-dir ./custom_vectors
 ```
 
 ### API Server
 
 ```bash
-# Run the API server
+# Run API server with default settings
 python main.py --mode api
 
 # Specify host and port
 python main.py --mode api --host 127.0.0.1 --port 8080
+
+# Rebuild the vector database
+python main.py --mode api --rebuild
 ```
 
-## API Endpoints
+### API Endpoints
 
-- **POST /api/query**: Process a query
+- **GET /** - API information
+- **POST /api/query** - Process a query
   ```json
   {
     "query": "What activities are available in Halifax?"
   }
   ```
-
-- **GET /api/history**: Get chat history
-
-- **POST /api/clear-history**: Clear chat history
-
-## Document Categories
-
-The chatbot recognizes and categorizes documents based on their content:
-
-- **Activities**: Information about tours, excursions, and leisure activities
-- **Ship Services**: Onboard amenities, policies, and services
-- **Travel Requirements**: Packing lists, documents, etc.
-- **Visa Requirements**: ESTA (USA) and eTA (Canada) information
-- **Technology**: WiFi and other tech-related information
-- **Wellness**: Spa services and wellness options
+- **GET /api/history** - Get chat history
+- **POST /api/clear-history** - Clear chat history
 
 ## Configuration Options
 
-- `--docs-dir`: Directory containing documents (default: "./docs")
-- `--db-dir`: Directory for vector store (default: "./chroma_db")
-- `--ollama-url`: Ollama server URL (default: "http://194.171.191.226:3061")
-- `--model`: Model name to use (default: "llama3.1:8b")
-- `--rebuild`: Force rebuilding the vector database
+Key configuration settings can be adjusted in `src/config.py`:
+
+- **OLLAMA_SERVER**: URL of the Ollama server
+- **CHAT_MODEL**: Language model for chat responses
+- **EMBED_MODEL**: Model for text embeddings
+- **CHUNK_SIZE**: Size of document chunks
+- **RETRIEVER_K**: Number of chunks to retrieve per query
+- **TEMPERATURE**: Temperature for generation (0.0-1.0)
+
+## Document Categories
+
+The system categorizes documents for better retrieval:
+
+- **activities**: Activity schedules and excursions
+- **ship_services**: Onboard amenities and services
+- **travel_requirements**: Packing lists and required documents
+- **visa_requirements**: ESTA (USA) and eTA (Canada) information
+- **technology**: WiFi and device instructions
+- **wellness**: Spa services and wellness options
 
 ## Development
 
-### Running Individual Components
-
-Each module can be run independently for testing:
-
-```bash
-# Test document processor
-python -m src.document_processor
-
-# Test RAG pipeline
-python -m src.rag_pipeline
-
-# Test chatbot
-python -m src.chatbot
-```
-
 ### Adding New Documents
 
-1. Place new PDF documents in the `docs/` directory
-2. Run the chatbot with the `--rebuild` flag to include the new documents:
+1. Place new PDF documents in the `data/` directory
+2. Run with the `--rebuild` flag to reprocess documents:
    ```bash
-   python main.py --rebuild
+   python main.py --mode cli --rebuild
    ```
+
+### Running Tests
+
+```bash
+pytest
+```
 
 ## License
 
-[Insert License Information]
+[Insert appropriate license information]
 
 ## Contributors
 
-[Insert Contributor Information]
+[List of contributors]
+
+## Acknowledgments
+
+This project was developed as part of the Marbet challenge for BUas Advanced Data Science & AI program.

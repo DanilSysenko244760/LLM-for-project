@@ -3,5 +3,5 @@
   <component name="Black">
     <option name="sdkName" value="tfjs_compat" />
   </component>
-  <component name="ProjectRootManager" version="2" project-jdk-name="MARBET" project-jdk-type="Python SDK" />
+  <component name="ProjectRootManager" version="2" project-jdk-name="NEW_MARBET" project-jdk-type="Python SDK" />
 </project>
