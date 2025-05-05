@@ -85,14 +85,14 @@ python main.py --mode cli
 
 The `MarbetEventAssistant` class and main script accept several configuration parameters:
 
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `docs_folder` | Directory containing document files | "C:/Users/Alex/Documents/GitHub/LLM-for-project/marbet_chatbot/docs" |
-| `ollama_server` | URL of your Ollama server | "http://194.171.191.226:3061" |
-| `chat_model` | LLM model to use for chat | "llama3.3:70b-instruct-q5_K_M" |
-| `embed_model` | Model to use for embeddings | "mxbai-embed-large:latest" |
-| `cache_dir` | Directory for caching vectors and sessions | "./cache" |
-| `use_cache` | Whether to use cached vectorstore | False |
+| Parameter | Description | Default                            |
+|-----------|-------------|------------------------------------|
+| `docs_folder` | Directory containing document files | "Should be replaced by local path" |
+| `ollama_server` | URL of your Ollama server | "http://194.171.191.226:3061"      |
+| `chat_model` | LLM model to use for chat | "llama3.3:70b-instruct-q5_K_M"     |
+| `embed_model` | Model to use for embeddings | "mxbai-embed-large:latest"         |
+| `cache_dir` | Directory for caching vectors and sessions | "./cache"                          |
+| `use_cache` | Whether to use cached vectorstore | False                              |
 
 Example with custom configuration:
 

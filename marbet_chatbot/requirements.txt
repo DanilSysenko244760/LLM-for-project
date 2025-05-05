@@ -28,7 +28,7 @@ gradio==4.13.0
 # Development utilities
 python-dotenv==1.1.0
 colorama==0.4.6  # For CLI coloring
-logging==0.4.9.6  
+logging==0.4.9.6
 
 # File handling
 pickle-mixin==1.0.2  # Enhanced pickle capabilities
