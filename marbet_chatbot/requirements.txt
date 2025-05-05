@@ -1,4 +1,4 @@
-# Marbet Event Assistant Requirements
+# MARBET Event Assistant Requirements
 
 # LangChain ecosystem
 langchain==0.3.23
@@ -6,23 +6,29 @@ langchain-community==0.3.21
 langchain-core==0.3.51
 langchain-ollama==0.2.0
 langchain-text-splitters==0.3.8
+
+# Data processing and serialization
 pydantic==2.11.3
-
-# Ollama and FAISS
-ollama==0.4.7
 faiss-cpu==1.7.4
-
-# Document processing
-PyMuPDF==1.22.5
-pytesseract==0.3.10
+numpy==2.2.4
+matplotlib==3.8.2
 Pillow==10.3.0
 
-# API and CLI
-fastapi==0.115.9
-uvicorn==0.34.1
-colorama==0.4.6
+# Document handling
+PyMuPDF==1.22.5
+regex==2023.10.3  # For advanced text parsing
 
-# Utilities
-numpy==2.2.4
+# Ollama integration
+ollama==0.4.7
+requests==2.31.0
+
+# Web UI
+gradio==4.13.0
+
+# Development utilities
 python-dotenv==1.1.0
-pytest==8.0.2
+colorama==0.4.6  # For CLI coloring
+logging==0.4.9.6  
+
+# File handling
+pickle-mixin==1.0.2  # Enhanced pickle capabilities

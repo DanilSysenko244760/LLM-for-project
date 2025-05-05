@@ -2,19 +2,19 @@
 
 ## Overview
 
-MARBET Event Assistant is an AI-powered conversational agent specifically designed to provide detailed information about MARBET's Sales Trip 2024 aboard the Scenic Eclipse I cruise ship. This intelligent assistant uses retrieval-augmented generation (RAG) to answer questions accurately based on MARBET documentation, providing participants with a seamless way to get information about their luxury travel experience.
+MARBET Event Assistant is an AI-powered conversational agent designed to provide detailed information about MARBET's Sales Trip 2024 aboard the Scenic Eclipse I cruise ship. This intelligent assistant uses retrieval-augmented generation (RAG) to answer questions accurately based on MARBET documentation, providing participants with a seamless way to get information about their luxury travel experience.
 
 ## Features
 
-- **Document-Based Responses**: Answers questions using only information found in MARBET documents
-- **Semantic Text Processing**: Uses advanced semantic chunking for better understanding of documents
-- **Interactive Web Interface**: User-friendly chat interface with Gradio
-- **Source Visualization**: Visual representation of source document relevance
-- **Document Management**: Easy upload and integration of new documents
-- **Chat History**: Maintains conversation context for natural interactions
+- **Semantic Text Processing**: Uses advanced semantic chunking for better understanding of documents and more relevant answers
+- **Interactive Web Interface**: User-friendly chat interface with Gradio featuring real-time streaming responses
+- **CLI Option**: Command-line interface for lightweight usage scenarios
+- **High-Performance RAG**: Optimized vector retrieval with FAISS for fast, relevant responses
+- **Source Visualization**: Visual representation of document relevance with automatic citation tracking
+- **Document Management**: Easy upload and integration of new documents through the interface
+- **Session Persistence**: Maintains conversation context for natural multi-turn interactions
 - **Export Functionality**: Export conversations to markdown files
-- **Stream Responses**: Real-time streaming of AI responses
-- **Multi-language Support**: Designed to handle queries in multiple languages (primary: English)
+- **Performance Optimizations**: Caching, threading, and efficient memory management
 
 ## Installation
 
@@ -22,14 +22,13 @@ MARBET Event Assistant is an AI-powered conversational agent specifically design
 
 - Python 3.8+
 - Ollama server running (default: http://194.171.191.226:3061)
-- Required Python packages (see requirements.txt)
 
 ### Setup
 
 1. Clone the repository:
 ```bash
 git clone [repository_url]
-cd [repository_name]
+cd marbet-event-assistant
 ```
 
 2. Install dependencies:
@@ -39,7 +38,7 @@ pip install -r requirements.txt
 
 3. Create a directory for your MARBET documents:
 ```bash
-mkdir -p marbet_chatbot/docs
+mkdir -p docs
 ```
 
 4. Place your PDF and TXT documents in the docs folder.
@@ -76,35 +75,29 @@ if __name__ == "__main__":
     run_cli()
 ```
 
-Alternatively, modify the `use_gui` flag at the bottom of the script:
+Or via command line arguments:
 
-```python
-if __name__ == "__main__":
-    use_gui = False  # Set to False to use CLI instead of GUI
-    
-    if use_gui:
-        main()
-    else:
-        run_cli()
-```
-
-### Command Line Arguments
-
-The assistant accepts several command-line arguments:
-
-```
---mode [gui|cli]     Run in GUI mode (with Gradio interface) or CLI mode
---docs               Path to the documents folder
---server             Ollama server URL
---model              LLM model to use
---embeddings         Embedding model to use
---cache              Cache directory
---use-cache          Use cached vectorstore if available
-```
-
-Example:
 ```bash
-python main.py --mode cli --model llama3.3:70b-instruct-q5_K_M --use-cache
+python main.py --mode cli
+```
+
+### Configuration Options
+
+The `MarbetEventAssistant` class and main script accept several configuration parameters:
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `docs_folder` | Directory containing document files | "C:/Users/Alex/Documents/GitHub/LLM-for-project/marbet_chatbot/docs" |
+| `ollama_server` | URL of your Ollama server | "http://194.171.191.226:3061" |
+| `chat_model` | LLM model to use for chat | "llama3.3:70b-instruct-q5_K_M" |
+| `embed_model` | Model to use for embeddings | "mxbai-embed-large:latest" |
+| `cache_dir` | Directory for caching vectors and sessions | "./cache" |
+| `use_cache` | Whether to use cached vectorstore | False |
+
+Example with custom configuration:
+
+```bash
+python main.py --docs ./my_documents --server http://localhost:11434 --model mistral:7b --cache ./my_cache --use-cache
 ```
 
 ### Integration in Custom Applications
@@ -134,108 +127,58 @@ for doc in result["source_documents"]:
     print(f"Content: {doc.page_content[:100]}...")
 ```
 
-## Configuration Options
+## Key Components
 
-The `MarbetEventAssistant` class accepts several configuration parameters:
+### SemanticTextSplitter
 
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `docs_folder` | Directory containing document files | "C:/Users/Alex/Documents/GitHub/LLM-for-project/marbet_chatbot/docs" |
-| `ollama_server` | URL of your Ollama server | "http://194.171.191.226:3061" |
-| `chat_model` | LLM model to use for chat | "llama3.3:70b-instruct-q5_K_M" |
-| `embed_model` | Model to use for embeddings | "mxbai-embed-large:latest" |
-| `cache_dir` | Directory for caching vectors and sessions | "./cache" |
-| `use_cache` | Whether to use cached vectorstore | False |
+The application uses a custom text splitter that preserves semantic structure:
 
-## Performance Optimizations
+- Respects paragraph and sentence boundaries
+- Hierarchical splitting (paragraphs first, then sentences if needed)
+- Adaptive chunking for varying content lengths
+- Fallback strategies for extreme cases
 
-The MARBET Event Assistant includes several optimizations for improved performance:
+### Efficient Document Processing
 
-- **Vectorstore Caching**: Avoids reprocessing documents by caching the vectorstore
-- **Semantic Chunking**: Improves retrieval quality through meaningful document splitting
-- **Parameterized Retrieval**: The k=12 parameter retrieves sufficient context without overwhelming the model
-- **Streaming**: Reduces perceived latency through progressive response rendering
-- **ThreadPoolExecutor**: Loads files in parallel for faster document processing
-- **Atomic File Operations**: Prevents data corruption during cache writing
-- **Efficient String Operations**: Uses optimized string handling techniques
-- **Memory Management**: Properly releases resources after visualization creation
+- Parallel document loading with ThreadPoolExecutor
+- Optimized caching with atomic writes
+- Support for PDF and TXT documents
 
-## Customization
+### Streaming Response Handling
 
-### System Prompt
+- Real-time token streaming for responsive UI
+- Buffered updates for performance
+- Thread-safe implementation
 
-You can modify the `SYSTEM_PROMPT` class variable in the `MarbetEventAssistant` class to change the assistant's behavior, tone, and specific instructions. The default prompt is tailored for the MARBET Sales Trip 2024.
+### Vector Storage and Retrieval
 
-### Chunking Strategy
-
-The semantic chunking parameters can be adjusted:
-- `chunk_size`: The target size for text chunks (default: 700)
-- `chunk_overlap`: The amount of overlap between chunks (default: 150)
-- `paragraph_separator`: Define how paragraphs are identified (default: "\n\n")
-
-### Retrieval Parameters
-
-Modify the search parameters in the `_setup_components` method:
-- `search_kwargs={"k": 12, "fetch_k": 20}`: Number of chunks to retrieve and candidates to consider
-
-### LLM Parameters
-
-Customize the LLM behavior:
-- `temperature`: Controls randomness (higher = more creative, lower = more deterministic)
-- `system`: The system prompt that guides the LLM's behavior
+- FAISS for high-performance vector similarity search
+- Configurable retrieval parameters
+- Caching to avoid reprocessing documents
 
 ## Troubleshooting
 
 ### Common Issues
 
 1. **Connection Error to Ollama Server**
-   - Ensure the Ollama server is running
-   - Check the URL and port are correct
-   - Verify network connectivity to the server
+   - Ensure the Ollama server is running and accessible
+   - Check network connectivity and firewall settings
+   - Verify correct URL and port in configuration
 
 2. **Document Loading Failures**
-   - Check file permissions
+   - Check file permissions and encoding
    - Ensure PDF files are not corrupted or password-protected
-   - Try converting problematic files to text format
+   - Check the logs for specific file loading issues
 
 3. **Memory Issues**
-   - Reduce chunk size or number of chunks retrieved
+   - Adjust chunk size and retrieval parameters
    - Use a smaller embedding model
-   - Process fewer documents at once
+   - Enable caching to reduce memory pressure
 
-4. **Slow Response Times**
-   - Enable caching (`use_cache=True`)
-   - Use a faster LLM model
-   - Reduce the number of chunks retrieved
-
-5. **Poor Answer Quality**
+4. **Poor Answer Quality**
+   - Check that relevant information exists in the document corpus
    - Adjust chunking parameters for better context preservation
-   - Increase the number of retrieved chunks
-   - Check document quality and formatting
-   - Refine the system prompt for better guidance
-
-## Logging
-
-The assistant uses Python's logging module for diagnostics. To adjust the logging level:
-
-```python
-logging.basicConfig(
-    level=logging.INFO,  # Change to logging.DEBUG for more detail
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
-```
-
-To save logs to a file, modify the logging configuration:
-
-```python
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    filename='marbet_assistant.log',
-    filemode='a'
-)
-```
+   - Try different retrieval parameters (k value)
 
 ## Contributing
 
@@ -247,10 +190,6 @@ Contributions to improve the MARBET Event Assistant are welcome! Please follow t
 4. Commit your changes (`git commit -m 'Add some amazing feature'`)
 5. Push to the branch (`git push origin feature/amazing-feature`)
 6. Submit a pull request
-
-## License
-
-[Specify your license information here]
 
 ---
 
