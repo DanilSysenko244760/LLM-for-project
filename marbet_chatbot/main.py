@@ -14,15 +14,16 @@ from datetime import datetime
 import re
 from concurrent.futures import ThreadPoolExecutor
 import threading
+import json
+import faiss
 
 # Updated LangChain imports
 from langchain_ollama import OllamaEmbeddings, OllamaLLM
 from langchain.chains import ConversationalRetrievalChain
 from langchain_community.document_loaders import DirectoryLoader, PyPDFDirectoryLoader, PyPDFLoader, TextLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter, MarkdownHeaderTextSplitter, TokenTextSplitter
+from langchain.text_splitter import RecursiveCharacterTextSplitter, TextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain.callbacks.base import BaseCallbackHandler
-from langchain.text_splitter import TextSplitter
 
 # Configure logging with a more efficient format
 logging.basicConfig(level=logging.INFO,
@@ -30,74 +31,36 @@ logging.basicConfig(level=logging.INFO,
                     datefmt='%Y-%m-%d %H:%M:%S')
 logger = logging.getLogger(__name__)
 
-# Import and configure NLTK with try-except - using a singleton pattern for nltk data
-_nltk_initialized = False
+# Simple but effective sentence tokenizer using regex
+_SENTENCE_PATTERN = re.compile(r'(?<=[.!?])\s+')
 
 
-def initialize_nltk():
-    global _nltk_initialized
-    if _nltk_initialized:
-        return True
+def sentence_tokenize(text):
+    """Simple regex-based sentence tokenizer that's more reliable than NLTK-dependent options"""
+    # Handle common abbreviations to avoid false splits
+    text = re.sub(r'(\b[A-Z][a-z]*\.)(\s+)([A-Za-z])', r'\1\2\2\3', text)  # Handle "Mr. Smith" type patterns
 
-    try:
-        import nltk
-        from nltk.tokenize import sent_tokenize
+    # Split on sentence boundaries
+    sentences = _SENTENCE_PATTERN.split(text)
 
-        # Download required NLTK data if not already present
-        try:
-            nltk.data.find('tokenizers/punkt')
-        except LookupError:
-            # Download punkt instead of punkt_tab
-            nltk.download('punkt', quiet=True)
-
-            # Verify it was downloaded successfully
-            try:
-                nltk.data.find('tokenizers/punkt')
-                logger.info("NLTK punkt downloaded successfully")
-            except LookupError:
-                logger.warning("Failed to download NLTK punkt data")
-                return False
-
-        _nltk_initialized = True
-        return True
-    except ImportError:
-        logger.warning("NLTK not available, using simple sentence tokenizer")
-        return False
-
-
-# Define a simple fallback sentence tokenizer
-def simple_sentence_tokenizer(text):
-    # Optimized regex-based tokenizer with precompiled pattern
-    pattern = re.compile(r'(?<=[.!?])\s+')
-    return pattern.split(text)
-
-
-# Get appropriate sentence tokenizer
-def get_sent_tokenize():
-    if initialize_nltk():
-        import nltk
-        return nltk.tokenize.sent_tokenize
-    else:
-        return simple_sentence_tokenizer
+    # Filter empty sentences
+    return [s.strip() for s in sentences if s.strip()]
 
 
 class SemanticTextSplitter(TextSplitter):
-    """A text splitter that uses semantic boundaries like paragraphs, sections, and sentences."""
+    """An optimized text splitter that uses semantic boundaries like paragraphs and sentences."""
 
     def __init__(
             self,
-            chunk_size: int = 700,
-            chunk_overlap: int = 150,
+            chunk_size: int = 800,  # Increased for better context
+            chunk_overlap: int = 200,  # Increased for better overlap
             paragraph_separator: str = "\n\n",
-            sentence_separator: Optional[str] = None,
             keep_separator: bool = True,
             length_function: callable = len,
     ):
         super().__init__(chunk_size=chunk_size, chunk_overlap=chunk_overlap,
                          length_function=length_function, keep_separator=keep_separator)
         self.paragraph_separator = paragraph_separator
-        self.sentence_separator = sentence_separator
-        self.sent_tokenize = get_sent_tokenize()
         # Precompile the pattern for empty paragraphs
         self._empty_pattern = re.compile(r"^\s*$")
 
@@ -114,7 +77,7 @@ class SemanticTextSplitter(TextSplitter):
         current_chunk_len = 0
 
         for paragraph in paragraphs:
-            # Skip empty paragraphs more efficiently
+            # Skip empty paragraphs
             if self._empty_pattern.match(paragraph):
                 continue
 
@@ -135,16 +98,7 @@ class SemanticTextSplitter(TextSplitter):
                     current_chunk_len = paragraph_len
             else:
                 # Paragraph is too large, split into sentences
-                try:
-                    # Try using NLTK's sentence tokenizer first
-                    if not self.sentence_separator:
-                        sentences = self.sent_tokenize(paragraph)
-                    else:
-                        sentences = paragraph.split(self.sentence_separator)
-                except Exception as e:
-                    # If tokenization fails, use our simple tokenizer
-                    logger.warning(f"Sentence tokenization failed: {e}, using simple tokenizer")
-                    sentences = simple_sentence_tokenizer(paragraph)
+                sentences = sentence_tokenize(paragraph)
 
                 # Process each sentence
                 for sentence in sentences:
@@ -162,13 +116,13 @@ class SemanticTextSplitter(TextSplitter):
                             current_chunk = []
                             current_chunk_len = 0
 
-                        # Split the long sentence using simple splitting
-                        # Creating TokenTextSplitter is expensive, so only do it when needed
-                        token_splitter = TokenTextSplitter(
+                        # Split the long sentence using a recursive character splitter
+                        # Create it only when needed for better performance
+                        char_splitter = RecursiveCharacterTextSplitter(
                             chunk_size=self._chunk_size,
                             chunk_overlap=self._chunk_overlap
                         )
-                        sub_chunks = token_splitter.split_text(sentence)
+                        sub_chunks = char_splitter.split_text(sentence)
                         chunks.extend(sub_chunks)
                     else:
                         # Normal case - add sentence to current chunk if it fits
@@ -192,6 +146,8 @@ class SemanticTextSplitter(TextSplitter):
 
 
 class StreamHandler(BaseCallbackHandler):
+    """Optimized stream handler with buffered updates"""
+
     def __init__(self, container):
         self.container = container
         self.text = ""
@@ -213,48 +169,27 @@ class StreamHandler(BaseCallbackHandler):
 
 
 class MarbetEventAssistant:
-    SYSTEM_PROMPT = """You are MARBET's AI-powered Event Assistant for the Sales Trip 2024. Your primary purpose is to provide accurate, helpful information to participants about their upcoming luxury travel experience on the Scenic Eclipse I cruise ship, traveling from Canada to the USA in October 2024.
-Core Principles
+    # Enhanced system prompt for more natural responses
+    SYSTEM_PROMPT = """You are MARBET's AI-powered Event Assistant for the Sales Trip 2024, helping participants with information about their luxury travel experience on the Scenic Eclipse I cruise ship, traveling from Canada to the USA in October 2024.
 
-Document-Based Responses Only: Answer questions using ONLY information found in the provided MARBET documents. Never invent or guess information not explicitly stated in these materials. 
-Event Context: You assist with a luxury cruise sales trip from October 4-11, 2024, traveling from Halifax, Canada to New York City, with stops in Lunenburg, Portland, Boston, Provincetown, and Martha's Vineyard.
-"Election Program" Clarification: The term "Election program" in all documents refers EXCLUSIVELY to optional activities participants can select - it has NOTHING to do with political elections. Always interpret this term as optional excursion choices.
-Accuracy with Dates and Locations: When users ask about specific dates (e.g., "Friday, 11.10.2024") or locations (e.g., "New York City"), search for those exact terms in the documents and provide the relevant information.
-Clear Labeling of Assumptions: If making a logical assumption based on document context, explicitly label it: "Based on the documentation, I would assume that..."
-Handling Missing Information:
+Core Principles:
+1. BASE YOUR RESPONSES EXCLUSIVELY ON INFORMATION IN THE MARBET DOCUMENTS. Never invent or guess information not explicitly stated.
+2. Provide context about the luxury cruise sales trip (October 4-11, 2024) from Halifax to New York City, with stops in Lunenburg, Portland, Boston, Provincetown, and Martha's Vineyard.
+3. Note that "Election program" refers EXCLUSIVELY to optional activities participants can select - NOT political elections.
+4. When asked about specific dates or locations, search for those exact terms in the documents.
 
-Acknowledge understanding: "I understand you're asking about [topic]."
-Be transparent: "The MARBET documents don't provide specific information about [topic]."
-Suggest next steps: "For the most accurate information, please contact the crew team."
+Communication Guidelines:
+1. Be friendly, concise, and conversational - avoid sounding robotic or overly formal.
+2. If information isn't available in documents, acknowledge the question, explain that specific information isn't in the MARBET documents, and suggest contacting the crew team. Use natural language like "I don't currently have details about that in my documents" rather than rigid "Information not found" responses.
+3. Aim to be helpful even when you don't have complete information.
+4. When uncertain, clearly label assumptions: "Based on the documents, I would assume that..."
 
-
-Communication Style:
-
-Friendly and welcoming
-Concise and clear
-Natural conversational tone
-Professional but not overly formal
-Enthusiastic about the luxury travel experience
-
-
-
-Key Information Areas
-
-Itinerary: Assist with dates, locations, and scheduled activities for each port
-Optional Activities: Provide details on "Election program" options at each location
-Ship Information: Answer questions about the Scenic Eclipse I facilities and services
-Travel Documentation: Guide on ESTA/eTA requirements for USA/Canada
-Packing & Preparation: Advise on what to bring based on the packing list
-Technical Assistance: Help with WiFi connection and onboard technology
-Safety & Procedures: Explain ship safety protocols and emergency procedures
-
-Response Structure
-
-Acknowledge the question with a friendly greeting
-Provide a direct, accurate answer based exclusively on MARBET documents
-Add relevant context or additional helpful information if available in documents
-Clarify any assumptions you're making, clearly labeled as such
-End with an offer to help with further questions
+Response Structure:
+1. Acknowledge the question with a friendly greeting
+2. Provide a direct, accurate answer based exclusively on MARBET documents
+3. Add relevant context if available
+4. Clarify any assumptions you're making
+5. End with an offer to help with further questions
 
 Remember that your goal is to make participants feel informed, confident, and excited about their upcoming luxury travel experience, while sticking strictly to the factual information provided in the MARBET documents."""
 
@@ -264,7 +199,7 @@ Remember that your goal is to make participants feel informed, confident, and ex
                  chat_model: str = 'llama3.3:70b-instruct-q5_K_M',
                  embed_model: str = "mxbai-embed-large:latest",
                  cache_dir: str = "./cache",
-                 use_cache: bool = False):
+                 use_cache: bool = True):
         self.docs_folder = docs_folder
         self.ollama_server = ollama_server
         self.chat_model = chat_model
@@ -281,6 +216,7 @@ Remember that your goal is to make participants feel informed, confident, and ex
         os.makedirs(docs_folder, exist_ok=True)
         os.makedirs(cache_dir, exist_ok=True)
         os.makedirs(os.path.join(cache_dir, "sessions"), exist_ok=True)
+        os.makedirs(os.path.join(cache_dir, "sources"), exist_ok=True)
 
         self._setup_components()
 
@@ -306,24 +242,33 @@ Remember that your goal is to make participants feel informed, confident, and ex
 
             # Only create retriever and LLM if they don't exist already
             if not hasattr(self, 'retriever') or self.retriever is None:
+                # Improved retrieval parameters for better results
                 self.retriever = self.vectorstore.as_retriever(
-                    search_kwargs={"k": 12, "fetch_k": 20}  # Fetch more candidates for better filtering
+                    search_kwargs={
+                        "k": 8,  # Fewer but more relevant chunks
+                        "fetch_k": 20,  # Fetch more for filtering
+                    }
                 )
 
             if not hasattr(self, 'llm') or self.llm is None:
+                # Optimized LLM parameters for better answers
                 self.llm = OllamaLLM(
                     base_url=self.ollama_server,
                     model=self.chat_model,
-                    temperature=0.8,
-                    system=self.SYSTEM_PROMPT
+                    temperature=0.7,  # Slightly reduced for more factual responses
+                    system=self.SYSTEM_PROMPT,
+                    num_predict=2048,  # Ensure complete responses
+                    stop=["Human:", "<|im_end|>"]  # Better stopping criteria
                 )
 
             if not hasattr(self, 'qa_chain') or self.qa_chain is None:
+                # Enhanced chain configuration for better responses
                 self.qa_chain = ConversationalRetrievalChain.from_llm(
                     llm=self.llm,
-                    chain_type="stuff",
+                    chain_type="stuff",  # Simple but effective for our use case
                     retriever=self.retriever,
-                    return_source_documents=True
+                    return_source_documents=True,
+                    verbose=False  # Reduce noise in logs
                 )
 
     def _process_documents(self):
@@ -343,8 +288,8 @@ Remember that your goal is to make participants feel informed, confident, and ex
             all_docs.extend(pdf_docs)
             all_docs.extend(txt_docs)
 
-        # Split documents using semantic chunking with optimized settings
-        splitter = SemanticTextSplitter(chunk_size=700, chunk_overlap=150)
+        # Split documents using improved semantic chunking
+        splitter = SemanticTextSplitter(chunk_size=800, chunk_overlap=200)
         chunks = splitter.split_documents(all_docs)
         logger.info(f"Split documents into {len(chunks)} chunks using semantic chunking")
 
@@ -392,12 +337,16 @@ Remember that your goal is to make participants feel informed, confident, and ex
             return []
 
     def _save_vectorstore(self):
-        """Save vectorstore to cache with error handling"""
+        """Save vectorstore to cache with improved error handling for various FAISS implementations"""
         cache_path = self._get_cache_path()
         temp_path = f"{cache_path}.tmp"
         try:
-            # Write to temporary file first
+            # Direct pickle approach - simpler and more reliable
             with open(temp_path, 'wb') as f:
+                # Try to detach any threading objects before pickling
+                if hasattr(self.vectorstore, '_rlock'):
+                    self.vectorstore._rlock = None  # Remove unpicklable threading lock
+
                 pickle.dump(self.vectorstore, f, protocol=pickle.HIGHEST_PROTOCOL)
 
             # If successful, rename to final path (atomic operation)
@@ -434,7 +383,7 @@ Remember that your goal is to make participants feel informed, confident, and ex
                 return f"No content found in {os.path.basename(file_path)}"
 
             # Use semantic chunking
-            splitter = SemanticTextSplitter(chunk_size=700, chunk_overlap=150)
+            splitter = SemanticTextSplitter(chunk_size=800, chunk_overlap=200)
             chunks = splitter.split_documents(docs)
 
             # Get embeddings and add to vectorstore
@@ -445,7 +394,9 @@ Remember that your goal is to make participants feel informed, confident, and ex
             self._save_vectorstore()
 
             # Update retriever to use new documents
-            self.retriever = self.vectorstore.as_retriever(search_kwargs={"k": 12})
+            self.retriever = self.vectorstore.as_retriever(
+                search_kwargs={"k": 8, "fetch_k": 20}
+            )
 
             return f"Document {os.path.basename(file_path)} added successfully with {len(chunks)} chunks."
         except Exception as e:
@@ -465,14 +416,23 @@ Remember that your goal is to make participants feel informed, confident, and ex
                 stream_handler = StreamHandler(stream_container)
                 callbacks.append(stream_handler)
 
-            # Process the query
-            result = self.qa_chain.invoke(
-                {
-                    "question": query,
-                    "chat_history": self.chat_history
-                },
-                callbacks=callbacks if callbacks else None
-            )
+            # Process the query with timeout handling
+            result = {}
+            try:
+                # Set a timeout to ensure the request doesn't hang
+                result = self.qa_chain.invoke(
+                    {
+                        "question": query,
+                        "chat_history": self.chat_history
+                    },
+                    callbacks=callbacks if callbacks else None
+                )
+            except Exception as e:
+                logger.error(f"Error during query processing: {e}", exc_info=True)
+                return {
+                    "answer": "I apologize, but I'm having trouble processing your question. Could you please try rephrasing it?",
+                    "source_documents": []
+                }
 
             # Update chat history - limit to 10 entries for memory efficiency
             self.chat_history.append((query, result["answer"]))
@@ -485,7 +445,7 @@ Remember that your goal is to make participants feel informed, confident, and ex
             return result
         except Exception as e:
             logger.error(f"Error processing query: {e}", exc_info=True)
-            error_msg = f"I encountered an error processing your question. Please try again or rephrase your question."
+            error_msg = f"I apologize, but I encountered an issue while processing your question. Please try again or rephrase your question."
             return {"answer": error_msg, "source_documents": []}
 
     def _save_session(self):
@@ -550,7 +510,7 @@ Remember that your goal is to make participants feel informed, confident, and ex
 
         # Save and close to free memory
         plt.tight_layout()
-        temp_path = os.path.join(self.cache_dir, f"source_viz_{int(time.time())}.png")
+        temp_path = os.path.join(self.cache_dir, "sources", f"source_viz_{int(time.time())}.png")
         plt.savefig(temp_path, dpi=80, bbox_inches='tight')
         plt.close('all')  # Explicitly close all figures
 
@@ -602,26 +562,27 @@ def create_gradio_interface(assistant):
 
             ## Your AI guide to Marbet events and services
 
-            Ask me questions about event planning, venues, catering, entertainment options, and more!
+            Ask me questions about the Sales Trip 2024, including activities, itinerary, ship information, and more!
             """
         )
 
         with gr.Row():
             with gr.Column(scale=3):
-                # Optimize chatbot component
+                # Optimized chatbot component with updated parameters
                 chatbot = gr.Chatbot(
                     height=500,
-                    bubble_full_width=False,
                     show_copy_button=True,
-                    avatar_images=(user_avatar, bot_avatar)
+                    avatar_images=(user_avatar, bot_avatar),
+                    elem_id="chat-box"
                 )
 
                 with gr.Row():
                     msg = gr.Textbox(
-                        placeholder="Ask about Marbet services...",
+                        placeholder="Ask about the Sales Trip 2024...",
                         container=False,
                         scale=4,
-                        show_label=False
+                        show_label=False,
+                        elem_id="user-input"
                     )
                     submit_btn = gr.Button("Ask", variant="primary", scale=1)
 
@@ -648,19 +609,27 @@ def create_gradio_interface(assistant):
         # Response object for streaming
         response_obj = gr.Textbox(visible=False)
 
+        # Exported file component for download
+        export_file = gr.File(label="Download Chat Export", visible=False)
+
         # Optimize event handlers
         def user_input(message, history):
             """Handle user input efficiently"""
             if not message or not message.strip():
                 return "", history
-            return "", history + [[message, None]]
+
+            # Add user message to history
+            history = history + [[message, None]]
+            return "", history
 
         def bot_response(history):
             """Process bot response with optimized source visualization"""
             if not history:
                 return history, None
 
+            # Get the last user message
             query = history[-1][0]
+
             # Get response from assistant
             result = assistant.ask(query, response_obj)
 
@@ -669,8 +638,9 @@ def create_gradio_interface(assistant):
             if result.get("source_documents"):
                 viz_path = assistant.visualize_sources(result.get("source_documents", []))
 
-            # Update history
+            # Update history with bot response
             history[-1][1] = result["answer"]
+
             return history, viz_path
 
         def handle_upload(file):
@@ -699,12 +669,17 @@ def create_gradio_interface(assistant):
 
             return result
 
-        def export_chat():
-            """Export chat history"""
+        def clear_history_func():
+            """Clear chat history and reset UI"""
+            assistant.clear_history()
+            return [], None
+
+        def export_chat_func():
+            """Export chat history to a file and make it downloadable"""
             export_path = assistant.export_chat()
             if not export_path:
-                return gr.File.update(value=None, visible=False)
-            return gr.File.update(value=export_path, visible=True)
+                return gr.File(value=None, visible=False)
+            return gr.File(value=export_path, visible=True)
 
         # Set up UI interactions with optimized event flow
         msg.submit(
@@ -730,15 +705,13 @@ def create_gradio_interface(assistant):
         )
 
         # More efficient clear operation
-        clear_btn.click(lambda: ([], None), None, [chatbot, source_image], queue=False)
-        clear_btn.click(assistant.clear_history, None, None)
+        clear_btn.click(clear_history_func, None, [chatbot, source_image], queue=False)
 
         # Document upload handling
         upload_btn.change(handle_upload, upload_btn, upload_status)
 
-        # Export functionality
-        export_file = gr.File(label="Exported Chat", visible=False)
-        export_btn.click(export_chat, None, export_file)
+        # Export functionality - fixed to use the proper pattern
+        export_btn.click(export_chat_func, None, export_file)
 
     return interface
 
@@ -752,7 +725,7 @@ def main(mode='gui', **kwargs):
         if mode.lower() == 'cli':
             run_cli(assistant)
         else:
-            # Create and launch the Gradio interface with optimized settings
+            # Create and launch the Gradio interface with compatible settings
             interface = create_gradio_interface(assistant)
             interface.launch(
                 share=True,
@@ -777,7 +750,7 @@ def run_cli(assistant=None):
     print("=" * 50)
     print("MARBET EVENT ASSISTANT".center(50))
     print("=" * 50)
-    print("Ask me something about the documents. Type 'exit' to quit.")
+    print("Ask me something about the Sales Trip 2024. Type 'exit' to quit.")
 
     while True:
         try:

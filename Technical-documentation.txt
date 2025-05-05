@@ -1,0 +1,372 @@
+# Technical Documentation: MARBET Event Assistant
+
+## Overview
+
+The MARBET Event Assistant is a sophisticated AI-powered conversational system designed to provide accurate information about a luxury travel experience (specifically a cruise from Canada to the USA in October 2024). The system leverages retrieval-augmented generation (RAG) techniques to provide document-grounded responses to user queries.
+
+This documentation explains the technical implementation, architecture, and key components of the codebase.
+
+## System Architecture
+
+The system consists of four main components:
+
+1. **Document Processing**: Custom semantic text splitting, document loading, and preprocessing
+2. **Vector Storage**: Embedding generation and efficient vector search
+3. **Language Model Integration**: LLM-based conversational retrieval
+4. **User Interface**: Both command-line and web-based interfaces
+
+## Key Technologies
+
+- **LangChain**: Framework for language model applications
+- **Ollama**: For accessing local language models
+- **FAISS**: Facebook AI Similarity Search for efficient vector storage
+- **Gradio**: Web UI framework for ML applications
+- **NLTK**: Natural Language Toolkit for sentence tokenization
+- **Matplotlib**: For data visualization
+
+## Component Details
+
+### 1. Custom Semantic Text Splitter
+
+One of the most innovative aspects of this implementation is the `SemanticTextSplitter` class that improves upon standard text chunking methods:
+
+```python
+class SemanticTextSplitter(TextSplitter):
+    """A text splitter that uses semantic boundaries like paragraphs, sections, and sentences."""
+```
+
+**Key features**:
+
+- **Boundary Respect**: Preserves paragraph and sentence boundaries
+- **Hierarchical Splitting**: First splits by paragraphs, then falls back to sentences if needed
+- **Adaptive Chunking**: Handles varying content lengths appropriately
+- **Overflow Handling**: Employs fallback strategies for extremely long sentences
+- **Optimized Processing**: Uses precompiled regex patterns and efficient string operations
+
+**Implementation Details**:
+- Precompiled pattern for empty paragraphs: `self._empty_pattern = re.compile(r"^\s*$")`
+- Fallback tokenization for when NLTK isn't available
+- Special handling for long sentences using `TokenTextSplitter`
+- Efficient string joining operations
+
+**Performance Considerations**:
+- Chunk size (700) and overlap (150) balance context preservation with retrieval precision
+- Creates TokenTextSplitter instances only when needed to reduce overhead
+- Uses string joining methods that match the separator type
+
+### 2. Document Processing Pipeline
+
+The document processing flow includes:
+
+1. Loading documents from multiple sources and formats (PDF, text)
+2. Applying semantic chunking to break documents into meaningful units
+3. Generating embeddings for each chunk
+4. Storing embeddings in a vector database (FAISS)
+5. Caching the vectorstore for efficiency
+
+**Optimizations**:
+
+```python
+def _process_documents(self):
+    # Use ThreadPoolExecutor to load files in parallel
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        # Submit both loaders to run in parallel
+        pdf_future = executor.submit(self._load_pdfs)
+        txt_future = executor.submit(self._load_txts)
+```
+
+**Technical considerations**:
+- Parallel document loading with ThreadPoolExecutor
+- Atomic file operations for cache writing to prevent corruption
+- Efficient error handling with specific error capture for each file type
+- Temporary file usage for safe cache updating
+
+### 3. Streaming Implementation
+
+The `StreamHandler` provides real-time output generation with buffering for performance:
+
+```python
+class StreamHandler(BaseCallbackHandler):
+    def __init__(self, container):
+        self.container = container
+        self.text = ""
+        self.update_lock = threading.Lock()
+        self.buffer = []
+        self.last_update = time.time()
+
+    def on_llm_new_token(self, token: str, **kwargs):
+        with self.update_lock:
+            self.text += token
+            self.buffer.append(token)
+
+            # Update UI every 100ms or when buffer gets large
+            current_time = time.time()
+            if current_time - self.last_update > 0.1 or len(self.buffer) > 10:
+                self.container.update(value=self.text)
+                self.buffer = []
+                self.last_update = current_time
+```
+
+**Key Features**:
+- Thread-safe token handling with locks
+- Buffered updates to reduce UI refresh overhead
+- Time-based and buffer-size-based update triggering
+- Proper resource management
+
+### 4. Retrieval and Response Generation
+
+The system implements a conversational retrieval chain with customized retrieval parameters:
+
+```python
+self.qa_chain = ConversationalRetrievalChain.from_llm(
+    llm=self.llm,
+    chain_type="stuff",
+    retriever=self.retriever,
+    return_source_documents=True
+)
+```
+
+**Implementation details**:
+- Uses the "stuff" chain type to combine retrieved documents
+- Retrieves k=12 documents with fetch_k=20 candidates
+- Maintains a capped conversation history (10 turns)
+- Asynchronous session saving with threading
+- Source document tracking for visualization
+
+### 5. Memory and Resource Management
+
+Several techniques are employed to manage memory efficiently:
+
+1. **Image Generation Optimization**:
+```python
+def visualize_sources(self, source_documents):
+    # Create figure with smaller memory footprint
+    plt.figure(figsize=(10, 6), dpi=80)
+    # ...
+    plt.close('all')  # Explicitly close all figures
+```
+
+2. **Cache Path Optimization**:
+```python
+@functools.lru_cache(maxsize=32)
+def _get_cache_path(self):
+    """Cache the cache path to avoid repeated string operations"""
+    return os.path.join(self.cache_dir, "vectorstore.pkl")
+```
+
+3. **String Concatenation Efficiency**:
+```python
+# Use string builder pattern for more efficient string concatenation
+lines = ["# Marbet Event Assistant - Chat Export\n\n"]
+lines.append(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n")
+```
+
+### 6. User Interface Optimizations
+
+The Gradio interface includes several performance improvements:
+
+```python
+# Preload avatar images to avoid repeated network requests
+user_avatar = "https://cdn-icons-png.flaticon.com/512/5231/5231812.png"
+bot_avatar = "https://cdn-icons-png.flaticon.com/512/4712/4712035.png"
+
+# Use a more efficient theme setting
+theme = gr.themes.Soft()
+```
+
+**Additional UI Optimizations**:
+- Queue management for improved responsiveness
+- Visibility toggling for components when not needed
+- Efficient callback chaining
+- Simpler JSON structures for system information
+
+### 7. NLTK Integration with Singleton Pattern
+
+```python
+_nltk_initialized = False
+
+def initialize_nltk():
+    global _nltk_initialized
+    if _nltk_initialized:
+        return True
+
+    try:
+        import nltk
+        # ... initialization code ...
+        _nltk_initialized = True
+        return True
+    except ImportError:
+        logger.warning("NLTK not available, using simple sentence tokenizer")
+        return False
+```
+
+**Benefits**:
+- Prevents multiple initialization attempts
+- Provides graceful fallback for environments without NLTK
+- Minimizes startup time by checking initialization state
+
+### 8. Command-Line Interface Enhancements
+
+The CLI mode includes usability improvements:
+
+```python
+# Simple streaming in CLI mode
+result = assistant.ask(query)
+
+# Print the result character by character for a streaming effect
+for char in result["answer"]:
+    print(char, end="", flush=True)
+    time.sleep(0.005)  # Small delay for readability
+```
+
+**Features**:
+- Character-by-character streaming for smooth output
+- Source document citation at the end of responses
+- Proper signal handling for keyboard interrupts
+- Limited source display to prevent overwhelming output
+
+## Advanced Techniques
+
+### 1. Session Management
+
+The system implements stateful sessions with atomic file operations:
+
+```python
+def _save_session(self):
+    """Save session data with error handling and atomic writes"""
+    session_path = os.path.join(self.cache_dir, "sessions", f"{self.session_id}.pkl")
+    temp_path = f"{session_path}.tmp"
+    try:
+        with open(temp_path, 'wb') as f:
+            pickle.dump(self.chat_history, f, protocol=pickle.HIGHEST_PROTOCOL)
+        # Atomic replace
+        os.replace(temp_path, session_path)
+    except Exception as e:
+        logger.error(f"Error saving session: {e}")
+        # Clean up temp file if necessary
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except:
+                pass
+```
+
+**Key Features**:
+- Temporary file writing for atomic session updates
+- High-protocol pickle usage for efficient serialization
+- Proper cleanup of temporary files
+- Asynchronous saving to avoid blocking the main thread
+
+### 2. Dynamic Document Addition
+
+The system supports adding new documents at runtime with validation:
+
+```python
+def add_document(self, file_path):
+    """Add a document to the vectorstore with better error handling and optimization"""
+    try:
+        # Validate file exists
+        if not os.path.isfile(file_path):
+            return f"File not found: {os.path.basename(file_path)}"
+
+        # Check file type
+        if file_path.lower().endswith('.pdf'):
+            loader = PyPDFLoader(file_path, extract_images=False)
+        elif file_path.lower().endswith('.txt'):
+            loader = TextLoader(file_path, encoding="utf-8")
+        else:
+            return f"Unsupported file format: {os.path.basename(file_path)}"
+```
+
+**Implementation Details**:
+- File existence and type validation
+- Content validation (empty document checking)
+- Proper error messaging
+- Retriever update after adding documents
+
+### 3. Error Handling and Logging
+
+Comprehensive error handling and logging ensure system stability:
+
+```python
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s - %(levelname)s - %(message)s',
+                    datefmt='%Y-%m-%d %H:%M:%S')
+```
+
+**Logging Features**:
+- Simplified timestamp format for reduced log size
+- Leveled logging for easier filtering
+- Specific exception capturing with traceback information
+- Helpful user-facing error messages
+
+## System Prompt Engineering
+
+The system uses a carefully crafted prompt to guide the language model's behavior:
+
+```python
+SYSTEM_PROMPT = """You are MARBET's AI-powered Event Assistant for the Sales Trip 2024...
+# ... detailed instructions about behavior, context, and response style
+"""
+```
+
+**Key Prompt Elements**:
+- Domain-specific terminology clarification (e.g., "Election program" refers to excursion choices)
+- Response structure guidelines
+- Knowledge boundaries
+- Communication style guidance
+- Error handling instructions
+
+## Environment Variable Support
+
+The system supports environment variable configuration:
+
+```python
+# Skip caching if the environment variable is set
+if os.environ.get("SKIP_CACHE", "0") == "1":
+    logger.info("Skipping vectorstore caching due to environment setting")
+    return
+```
+
+## Command-Line Argument Parsing
+
+Enhanced argument parsing for better usability:
+
+```python
+parser = argparse.ArgumentParser(description="Marbet Event Assistant")
+parser.add_argument("--mode", choices=["gui", "cli"], default="gui",
+                    help="Run in GUI mode (with Gradio interface) or CLI mode")
+parser.add_argument("--docs",
+                    help="Path to the documents folder")
+```
+
+## Future Enhancements
+
+1. **Improved Document Processing**:
+   - Add support for more document formats (DOCX, HTML, etc.)
+   - Implement optical character recognition (OCR) for image-based PDFs
+   - Add metadata extraction for better context retrieval
+
+2. **Enhanced Retrieval**:
+   - Implement hybrid retrieval (combining semantic and keyword search)
+   - Add re-ranking of retrieved documents
+   - Support for filtering by document type or source
+
+3. **User Interface Improvements**:
+   - Add dark mode support
+   - Implement user preference persistence
+   - Add support for voice input/output
+
+4. **Performance Optimizations**:
+   - Implement document chunking in parallel
+   - Add support for quantized embedding models
+   - Optimize cache storage with compression
+
+5. **Authentication and Multi-User Support**:
+   - Add user authentication
+   - Support for user-specific document access
+   - Session persistence across user logins
+
+## Conclusion
+
+The MARBET Event Assistant demonstrates sophisticated implementation of RAG technologies with a strong focus on performance optimization, error handling, and user experience. The custom semantic text splitting, parallel document processing, and efficient memory management make it suitable for production environments with varying hardware capabilities.
