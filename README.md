@@ -35,6 +35,7 @@ cd marbet-event-assistant
 ```bash
 pip install -r requirements.txt
 ```
+For conda usage environment.yml is available, or full_requirements.txt
 
 3. Create a directory for your MARBET documents:
 ```bash
